@@ -17,26 +17,22 @@ from sncosmo.photdata import standardize_data, normalize_data
 from sncosmo.utils import Result, Interp1D, ppf
 from sncosmo.fitting import DataQualityError
 
-__all__ = ['fit_lc_hacked', 'fit_lc', 'nest_lc', 'mcmc_lc', 'flatten_result', 
-           'chisq']
+__all__ = ['fit_lc_mcov_iterative', 'fit_lc', 'nest_lc', 'mcmc_lc', 
+           'flatten_result', 'chisq']
 
-
-# ------------------- #
-# - Hacked function - #
-# ------------------- #
-def fit_lc_hacked(data, model, fit_param):
+def fit_lc_mcov_iterative(data, model, fit_param, **kwargs):
     """
     """
     data_fit = standardize_data(data)
     data_fit = normalize_data(data_fit)
     data_fit = cut_bands(data_fit, model)
-    res, fitted_model = fit_lc(data, model, fit_param)
+    res, fitted_model = fit_lc(data, model, fit_param, **kwargs)
     _, mcov = fitted_model.bandfluxcov(data_fit['band'], data_fit['time'], 
                                        zp=data_fit['zp'], zpsys=data_fit['zpsys'])
     return fit_lc(data, fitted_model, fit_param, 
-                  modelcov=True, customcov=mcov) 
+                  modelcov=True, fixed_mcov=mcov, **kwargs) 
 
-def _chisq(data, model, modelcov, customcov=None):
+def _chisq(data, model, modelcov, flux_cov, fixed_mcov):
     """Like chisq but assumes data is already standardized.
 
     The purpose of having this as a separate function is for the benefit
@@ -44,24 +40,27 @@ def _chisq(data, model, modelcov, customcov=None):
     times. Such functions explicitly call standardize_data and then this
     function.
     """
+    if flux_cov is None:
+        flux_cov = np.diag(data['fluxerr']**2)
 
     if modelcov:
         mflux, mcov = model.bandfluxcov(data['band'], data['time'],
                                         zp=data['zp'], zpsys=data['zpsys'])
         if customcov is not None:
             mcov = customcov.copy()
-        diff = (data['flux'] - mflux)
-        totcov = mcov + np.diag(data['fluxerr']**2)
-        invtotcov = np.linalg.inv(totcov)
-        return (np.dot(np.dot(diff[np.newaxis, :], invtotcov),
-                      diff[:, np.newaxis])[0, 0] + np.log(np.linalg.det(totcov)))
+        totcov = mcov + flux_cov
     else:
         mflux = model.bandflux(data['band'], data['time'],
                                zp=data['zp'], zpsys=data['zpsys'])
-        return np.sum(((data['flux'] - mflux) / data['fluxerr'])**2)
+        totcov = flux_cov.copy()
+    
+    diff = (data['flux'] - mflux)
+    invtotcov = np.linalg.inv(totcov)
+    return (np.dot(np.dot(diff[np.newaxis, :], invtotcov),
+                   diff[:, np.newaxis])[0, 0] + np.log(np.linalg.det(totcov)))
 
 
-def chisq(data, model, modelcov=False):
+def chisq(data, model, modelcov=False, flux_cov=None, fixed_mcov=None):
     """Calculate chisq statistic for the model, given the data.
 
     Parameters
@@ -81,8 +80,8 @@ def chisq(data, model, modelcov=False):
     chisq : float
     """
     data = standardize_data(data)
-    return _chisq(data, model, modelcov=modelcov)
-
+    return _chisq(data, model, modelcov=modelcov, flux_cov=flux_cov,
+                  fixed_mcov=fixed_mcov)
 
 def flatten_result(res):
     """Turn a result from fit_lc into a simple dictionary of key, value pairs.
@@ -218,7 +217,7 @@ def guess_t0_and_amplitude(data, model, minsnr):
 def fit_lc(data, model, vparam_names, bounds=None, method='minuit',
            guess_amplitude=True, guess_t0=True, guess_z=True,
            minsnr=5., modelcov=False, verbose=False, maxcall=10000,
-           customcov=None, **kwargs):
+           flux_cov=None, fixed_mcov=None, **kwargs):
     """Fit model parameters to data by minimizing chi^2.
 
     Ths function defines a chi^2 to minimize, makes initial guesses for
@@ -259,8 +258,11 @@ def fit_lc(data, model, vparam_names, bounds=None, method='minuit',
         Minimization method to use. Currently there is only one choice.
     modelcov : bool, optional
         Include model covariance when calculating chisq. Default is False.
-    customcov : NxN matrix [where N = len(data)], optional
-        Overwrite mcov of fit during with this; can be used to fix mcov while fitting
+    flux_cov : NxN matrix [where N = len(data)], optional
+        Covariance matrix of fluxes. When used, data["fluxerr"] is ignored
+    fixed_mcov : NxN matrix [where N = len(data)], optional
+        Overwrite mcov of fit during with this; can be used to fix mcov while 
+        fitting
     verbose : bool, optional
         Print messages during fitting.
 
@@ -404,7 +406,8 @@ def fit_lc(data, model, vparam_names, bounds=None, method='minuit',
         # argument for each parameter.
         def fitchisq(*parameters):
             model.parameters = parameters
-            return _chisq(data, model, modelcov=modelcov, customcov=customcov)
+            return _chisq(data, model, modelcov=modelcov, 
+                          flux_cov=flux_cov, fixed_mcov=fixed_mcov)
 
         # Set up keyword arguments to pass to Minuit initializer.
         kwargs = {}
@@ -519,7 +522,7 @@ def fit_lc(data, model, vparam_names, bounds=None, method='minuit',
 def nest_lc(data, model, vparam_names, bounds, guess_amplitude_bound=False,
             minsnr=5., priors=None, ppfs=None, npoints=100, method='single',
             maxiter=None, maxcall=None, modelcov=False, rstate=None,
-            verbose=False, **kwargs):
+            verbose=False, flux_cov=None, fixed_mcov=None, **kwargs):
     """Run nested sampling algorithm to estimate model parameters and evidence.
 
     Parameters
@@ -575,6 +578,11 @@ def nest_lc(data, model, vparam_names, bounds, guess_amplitude_bound=False,
         ``numpy.random`` module will be used.
     verbose : bool, optional
         Print running evidence sum on a single line.
+    flux_cov : NxN matrix [where N = len(data)], optional
+        Covariance matrix of fluxes. When used, data["fluxerr"] is ignored
+    fixed_mcov : NxN matrix [where N = len(data)], optional
+        Overwrite mcov of fit during with this; can be used to fix mcov while 
+        fitting
 
     Returns
     -------
@@ -718,7 +726,8 @@ def nest_lc(data, model, vparam_names, bounds, guess_amplitude_bound=False,
 
     def loglike(parameters):
         model.parameters[idx] = parameters
-        return -0.5 * _chisq(data, model, modelcov=modelcov)
+        return -0.5 * _chisq(data, model, modelcov=modelcov, flux_cov=flux_cov,
+                             fixed_mcov=fixed_mcov)
 
     t0 = time.time()
     res = nestle.sample(loglike, prior_transform, ndim, npdim=npdim,
@@ -770,7 +779,8 @@ def nest_lc(data, model, vparam_names, bounds, guess_amplitude_bound=False,
 def mcmc_lc(data, model, vparam_names, bounds=None, priors=None,
             guess_amplitude=True, guess_t0=True, guess_z=True,
             minsnr=5., modelcov=False, nwalkers=10, nburn=200,
-            nsamples=1000, thin=1, a=2.0):
+            nsamples=1000, thin=1, a=2.0, flux_cov=None,
+            fixed_mcov=None):
     """Run an MCMC chain to get model parameter samples.
 
     This is a convenience function around `emcee.EnsembleSampler`.
@@ -833,6 +843,11 @@ def mcmc_lc(data, model, vparam_names, bounds=None, priors=None,
         array will have (nsamples/thin) samples.
     a : float, optional
         Proposal scale parameter passed to the EnsembleSampler.
+    flux_cov : NxN matrix [where N = len(data)], optional
+        Covariance matrix of fluxes. When used, data["fluxerr"] is ignored
+    fixed_mcov : NxN matrix [where N = len(data)], optional
+        Overwrite mcov of fit during with this; can be used to fix mcov while 
+        fitting
 
     Returns
     -------
@@ -939,7 +954,8 @@ def mcmc_lc(data, model, vparam_names, bounds=None, priors=None,
                 return -np.inf
 
         model.parameters[modelidx] = parameters
-        logp = -0.5 * _chisq(data, model, modelcov=modelcov)
+        logp = -0.5 * _chisq(data, model, modelcov=modelcov, flux_cov=flux_cov,
+                             fixed_mcov=fixed_mcov)
 
         for i, func in idxpriors:
             logp += math.log(func(parameters[i]))
