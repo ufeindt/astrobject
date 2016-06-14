@@ -46,8 +46,8 @@ def _chisq(data, model, modelcov, flux_cov, fixed_mcov):
     if modelcov:
         mflux, mcov = model.bandfluxcov(data['band'], data['time'],
                                         zp=data['zp'], zpsys=data['zpsys'])
-        if customcov is not None:
-            mcov = customcov.copy()
+        if fixed_mcov is not None:
+            mcov = fixed_mcov.copy()
         totcov = mcov + flux_cov
     else:
         mflux = model.bandflux(data['band'], data['time'],
