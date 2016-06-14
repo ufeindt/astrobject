@@ -31,6 +31,7 @@ from astropy.cosmology import FlatLambdaCDM
 from astropy.table import Table, Column
 
 from .. import BaseObject
+from .lcfit_utils import fit_lc, fit_lc_mcov_iterative
 
 __all__ = ["LCFitter"]
 
@@ -96,7 +97,7 @@ class LCFitter( BaseObject ):
         """
         self.fit_all(modelcov=modelcov)
 
-    def fit_all(self, modelcov=False):
+    def fit_all(self, modelcov=False, iterative_modelcov=False):
         """
         """
         if modelcov:
@@ -113,14 +114,17 @@ class LCFitter( BaseObject ):
             for pname in [name for name in self.model.param_names
                           if name not in self.fit_param and name != 'mwr_v']:
                 if pname not in lc.meta.keys():
-                    raise KeyError("Parameter '%s' not in lightcurve meta dict"%pname)
+                    raise KeyError("Parameter '%s' not in lightcurve meta dict"
+                                   %pname)
                 self.model.set(**{pname: lc.meta[pname]})
 
             try: 
-                if modelcov:
-                    res, _ = fit_lc_hacked(lc, self.model, self.fit_param)
+                if iterative_modelcov:
+                    res, _ = fit_lc_mcov_iterative(lc, self.model, 
+                                                   self.fit_param)
                 else:
-                    res, _ = sncosmo.fit_lc(lc, self.model, self.fit_param)
+                    res, _ = fit_lc(lc, self.model, self.fit_param,
+                                    modelcov=modelcov)
                 
                 if res['covariance'] is not None:
                     self._derived_properties['raw_fit'].append(res)
