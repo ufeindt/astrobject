@@ -64,7 +64,8 @@ class LCFitter( BaseObject ):
 
         fit_param -- list of parameters to be fit
         
-        bound -- dictionary or list of dictionaries of bounds for fit_parameters 
+        bounds -- dictionary of bounds for fit_parameters (same bounds for all 
+                  lcs for now) 
 
         load_from -- file with previously saved lcs and fits
 
