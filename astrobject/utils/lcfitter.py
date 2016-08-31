@@ -39,14 +39,14 @@ class LCFitter( BaseObject ):
     """ Basic lightcurve fitter class """
         
     PROPERTIES         = ['model', 'cosmo', 'lightcurves']
-    SIDE_PROPERTIES    = ['source', 'fit_param', 'bands']
+    SIDE_PROPERTIES    = ['source', 'fit_param', 'bounds', 'bands']
     DERIVED_PROPERTIES = ['fit', 'raw_fit', 'idx_good', 'good_lightcurves', 
                           'true']
 
     def __init__(self, lightcurves=None, source='salt2', model=None, 
                  cosmo=FlatLambdaCDM(H0=70, Om0=0.3), empty=False,
-                 fit_param=['t0', 'x0', 'x1', 'c'], load_from=None, 
-                 modelcov=False):
+                 fit_param=['t0', 'x0', 'x1', 'c'], bounds=None, 
+                 load_from=None, modelcov=False):
         """
         Arguments:
         ----------
@@ -63,6 +63,8 @@ class LCFitter( BaseObject ):
                   can be string for built-in model
 
         fit_param -- list of parameters to be fit
+        
+        bound -- dictionary or list of dictionaries of bounds for fit_parameters 
 
         load_from -- file with previously saved lcs and fits
 
@@ -85,6 +87,7 @@ class LCFitter( BaseObject ):
                 raise ValueError('Please provide lightcurves or savefile')
             self._properties['lightcurves'] = lightcurves
             self._side_properties['fit_param'] = fit_param
+            self._side_properties['bounds'] = bounds
             self._update_(modelcov=modelcov)
         else:
             self.load(load_from)
@@ -121,10 +124,11 @@ class LCFitter( BaseObject ):
             try: 
                 if iterative_modelcov:
                     res, _ = fit_lc_mcov_iterative(lc, self.model, 
-                                                   self.fit_param)
+                                                   self.fit_param, 
+                                                   bouns=self.bounds)
                 else:
                     res, _ = fit_lc(lc, self.model, self.fit_param,
-                                    modelcov=modelcov)
+                                    bounds=self.bounds, modelcov=modelcov)
                 
                 if res['covariance'] is not None:
                     self._derived_properties['raw_fit'].append(res)
@@ -508,6 +512,11 @@ class LCFitter( BaseObject ):
         """Lightcurve fit parameter names"""        
         return self._side_properties["fit_param"]
         
+    @property
+    def bounds(self):
+        """Lightcurve fit parameter names"""        
+        return self._side_properties["bounds"]
+
     @property
     def bands(self):
         """
